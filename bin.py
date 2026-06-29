@@ -1,77 +1,167 @@
+import os
+import re
+import html
 import logging
-import requests
+import httpx
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"   # ← Replace with your token
+TOKEN = os.environ.get("BOT_TOKEN")
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN environment variable not found")
 
-async def bin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
-    
-    # Support !bin , !ibin , /bin
-    if not any(text.startswith(cmd) for cmd in ['!bin ', '!ibin ', '/bin ']):
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+BIN_REGEX = re.compile(
+    r"^(?:!bin|!ibin|/bin)\s+(\d{6,8})$",
+    re.IGNORECASE,
+)
+
+
+async def lookup_bin(bin_number: str):
+    headers = {
+        "User-Agent": "TelegramBinBot/1.0"
+    }
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(
+            f"https://lookup.binlist.net/{bin_number}",
+            headers=headers,
+        )
+
+    return response
+
+
+async def bin_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.message.text:
         return
+
+    text = update.message.text.strip()
+
+    match = BIN_REGEX.match(text)
+
+    if not match:
+        return
+
+    bin_number = match.group(1)
 
     try:
-        bin_number = text.split(maxsplit=1)[1].strip()[:8]
-    except:
-        await update.message.reply_text("❌ Usage: `!bin 411111`", parse_mode='Markdown')
-        return
+        response = await lookup_bin(bin_number)
 
-    if not bin_number.isdigit() or len(bin_number) < 6:
-        await update.message.reply_text("❌ Valid 6-8 digit BIN required.")
-        return
-
-    try:
-        resp = requests.get(f"https://lookup.binlist.net/{bin_number}", timeout=10)
-        
-        if resp.status_code != 200:
-            await update.message.reply_text(f"❌ BIN `{bin_number}` not found or invalid.")
+        if response.status_code != 200:
+            await update.message.reply_text(
+                f"❌ BIN <code>{bin_number}</code> not found or invalid.",
+                parse_mode="HTML",
+            )
             return
 
-        data = resp.json()
-        bank = data.get('bank', {}) or {}
-        country = data.get('country', {}) or {}
+        data = response.json()
 
-        flag = country.get('emoji', '')
-        country_name = country.get('name', 'N/A')
+        bank = data.get("bank") or {}
+        country = data.get("country") or {}
+
+        country_name = html.escape(
+            country.get("name", "N/A")
+        )
+
+        flag = country.get("emoji", "")
+
+        bank_name = html.escape(
+            bank.get("name", "N/A")
+        )
+
+        scheme = html.escape(
+            str(data.get("scheme", "N/A")).upper()
+        )
+
+        card_type = html.escape(
+            str(data.get("type", "N/A")).upper()
+        )
+
+        level = html.escape(
+            str(data.get("brand", "N/A"))
+        )
+
+        user = html.escape(
+            update.effective_user.username
+            or update.effective_user.first_name
+        )
 
         result = f"""
-✅ **Bin:** {bin_number}
-🌍 **Country:** {country_name}({flag})
-🏦 **Bank:** {bank.get('name', 'N/A')}
-💳 **Brand:** {data.get('scheme', 'N/A').upper()}
-💰 **Type:** {data.get('type', 'N/A').upper()}
-🏆 **Level:** {data.get('brand', 'N/A')}
+💳 <b>BIN Lookup Result</b>
 
-**{data.get('scheme', 'N/A').upper()} CARD**
-👤 Sent by: @{update.message.from_user.username or update.message.from_user.first_name}
-        """.strip()
+🔢 <b>BIN:</b> {bin_number}
+🌍 <b>Country:</b> {country_name} {flag}
+🏦 <b>Bank:</b> {bank_name}
+💳 <b>Brand:</b> {scheme}
+💰 <b>Type:</b> {card_type}
+🏆 <b>Level:</b> {level}
 
-        await update.message.reply_text(result, parse_mode='Markdown')
-        
-    except Exception:
-        await update.message.reply_text("⚠️ Could not fetch BIN info right now.")
+<b>{scheme} CARD</b>
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+👤 <b>Sent by:</b> @{user}
+""".strip()
+
+        await update.message.reply_text(
+            result,
+            parse_mode="HTML",
+        )
+
+    except httpx.RequestError:
+        await update.message.reply_text(
+            "⚠️ Could not fetch BIN info right now."
+        )
+    except Exception as e:
+        logging.exception(e)
+        await update.message.reply_text(
+            "⚠️ An unexpected error occurred."
+        )
+
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     await update.message.reply_text(
-        "✅ **BIN Checker Bot Ready**\n\n"
+        "✅ BIN Checker Bot Ready\n\n"
         "Commands:\n"
-        "`!bin 544612`\n"
-        "`!ibin 223613`\n"
-        "or `/bin 411111`"
+        "!bin 544612\n"
+        "!ibin 223613\n"
+        "/bin 411111"
     )
 
+
 def main():
+    print("BOT_TOKEN loaded:", bool(TOKEN))
+
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("bin", bin_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bin_handler))
-    
-    print("🤖 Bot started - matching Shervano style")
+
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("bin", bin_handler)
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            bin_handler,
+        )
+    )
+
+    print("🤖 Bot started")
+
     app.run_polling()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
