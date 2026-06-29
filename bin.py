@@ -167,6 +167,7 @@ def main():
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
+        url_path=TOKEN,
         webhook_url=f"{RENDER_EXTERNAL_URL}/{TOKEN}",
     )
 
