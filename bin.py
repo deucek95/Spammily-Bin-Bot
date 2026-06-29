@@ -168,7 +168,6 @@ def main():
         listen="0.0.0.0",
         port=PORT,
         webhook_url=f"{RENDER_EXTERNAL_URL}/{TOKEN}",
-        secret_token=TOKEN,
     )
 
 
