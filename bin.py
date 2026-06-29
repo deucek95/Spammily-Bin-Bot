@@ -7,9 +7,14 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.environ.get("BOT_TOKEN")
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
+PORT = int(os.environ.get("PORT", 10000))
 
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable not found")
+
+if not RENDER_EXTERNAL_URL:
+    raise RuntimeError("RENDER_EXTERNAL_URL environment variable not found")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -139,8 +144,6 @@ async def start(
 
 
 def main():
-    print("BOT_TOKEN loaded:", bool(TOKEN))
-
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(
@@ -158,9 +161,15 @@ def main():
         )
     )
 
-    print("🤖 Bot started")
+    print(f"Webhook URL: {RENDER_EXTERNAL_URL}")
+    print(f"Port: {PORT}")
 
-    app.run_polling()
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=f"{RENDER_EXTERNAL_URL}/{TOKEN}",
+        secret_token=TOKEN,
+    )
 
 
 if __name__ == "__main__":
