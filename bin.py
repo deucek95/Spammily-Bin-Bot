@@ -161,14 +161,17 @@ def main():
         )
     )
 
-    print(f"Webhook URL: {RENDER_EXTERNAL_URL}")
+    WEBHOOK_PATH = "telegram"
+
+    print(f"Webhook URL: {RENDER_EXTERNAL_URL}/{WEBHOOK_PATH}")
     print(f"Port: {PORT}")
 
     app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=f"{RENDER_EXTERNAL_URL}/{TOKEN}",
+    listen="0.0.0.0",
+    port=PORT,
+    url_path=WEBHOOK_PATH,
+    webhook_url=f"{RENDER_EXTERNAL_URL}/{WEBHOOK_PATH}",
+    drop_pending_updates=True,
     )
 
 
