@@ -1,8 +1,8 @@
-```python
 import os
 import re
 import csv
 import html
+import zipfile
 import logging
 import httpx
 from telegram import Update
@@ -22,7 +22,9 @@ if not TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable not found")
 
 if not RENDER_EXTERNAL_URL:
-    raise RuntimeError("RENDER_EXTERNAL_URL environment variable not found")
+    raise RuntimeError(
+        "RENDER_EXTERNAL_URL environment variable not found"
+    )
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -40,35 +42,81 @@ CACHE = {}
 
 def load_local_bins():
     try:
-        with open(
-            "bin-list-data.csv",
-            encoding="utf-8",
-        ) as f:
+        with zipfile.ZipFile(
+            "bin-list-data.zip",
+            "r",
+        ) as z:
 
-            reader = csv.DictReader(f)
+            filename = z.namelist()[0]
 
-            for row in reader:
-                bin_number = row["BIN"].strip()
+            with z.open(filename) as f:
 
-                if not bin_number.isdigit():
-                    continue
+                reader = csv.DictReader(
+                    (
+                        line.decode("utf-8")
+                        for line in f
+                    )
+                )
 
-                if len(bin_number) < 6:
-                    continue
+                count = 0
 
-                LOCAL_BINS[bin_number[:6]] = {
-                    "scheme": row.get("Brand", ""),
-                    "type": row.get("Type", ""),
-                    "brand": row.get("Category", ""),
-                    "issuer": row.get("Issuer", ""),
-                    "country": row.get("CountryName", ""),
-                    "phone": row.get("IssuerPhone", ""),
-                    "url": row.get("IssuerUrl", ""),
-                }
+                for row in reader:
+
+                    bin_number = (
+                        row.get("BIN", "")
+                        .strip()
+                    )
+
+                    if (
+                        not bin_number.isdigit()
+                        or len(bin_number) < 6
+                    ):
+                        continue
+
+                    LOCAL_BINS[
+                        bin_number[:6]
+                    ] = {
+                        "scheme":
+                            row.get(
+                                "Brand",
+                                "",
+                            ),
+                        "type":
+                            row.get(
+                                "Type",
+                                "",
+                            ),
+                        "brand":
+                            row.get(
+                                "Category",
+                                "",
+                            ),
+                        "issuer":
+                            row.get(
+                                "Issuer",
+                                "",
+                            ),
+                        "country":
+                            row.get(
+                                "CountryName",
+                                "",
+                            ),
+                        "phone":
+                            row.get(
+                                "IssuerPhone",
+                                "",
+                            ),
+                        "url":
+                            row.get(
+                                "IssuerUrl",
+                                "",
+                            ),
+                    }
+
+                    count += 1
 
         logging.info(
-            "Loaded %s local BINs",
-            f"{len(LOCAL_BINS):,}",
+            f"Loaded {count:,} local BINs"
         )
 
     except Exception as e:
@@ -76,51 +124,68 @@ def load_local_bins():
         raise
 
 
-async def lookup_binlist(bin_number):
-    headers = {
-        "User-Agent": "TelegramBinBot/1.0"
-    }
+async def lookup_binlist(
+    bin_number: str,
+):
+    try:
+        async with httpx.AsyncClient(
+            timeout=10,
+        ) as client:
 
-    async with httpx.AsyncClient(
-        timeout=10
-    ) as client:
+            response = await client.get(
+                f"https://lookup.binlist.net/{bin_number}",
+                headers={
+                    "User-Agent":
+                        "TelegramBinBot/1.0"
+                },
+            )
 
-        response = await client.get(
-            f"https://lookup.binlist.net/{bin_number}",
-            headers=headers,
-        )
+        if response.status_code == 200:
+            return response.json()
 
-    if response.status_code == 200:
-        return response.json()
+    except Exception:
+        pass
 
     return None
 
 
-async def lookup_bin(bin_number):
+async def lookup_bin(
+    bin_number: str,
+):
     key = bin_number[:6]
 
     if key in CACHE:
         return CACHE[key]
 
     if key in LOCAL_BINS:
+
         result = {
-            "source": "LOCAL",
-            "data": LOCAL_BINS[key],
+            "source":
+                "LOCAL",
+            "data":
+                LOCAL_BINS[key],
         }
 
         CACHE[key] = result
+
         return result
 
-    result = await lookup_binlist(bin_number)
+    remote = await lookup_binlist(
+        bin_number
+    )
 
-    if result:
-        response = {
-            "source": "BINLIST",
-            "data": result,
+    if remote:
+
+        result = {
+            "source":
+                "BINLIST",
+            "data":
+                remote,
         }
 
-        CACHE[key] = response
-        return response
+        CACHE[key] = result
+
+        return result
 
     return None
 
@@ -129,20 +194,32 @@ async def bin_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    if not update.message:
+    if (
+        not update.message
+        or not update.message.text
+    ):
         return
 
-    text = update.message.text.strip()
+    text = (
+        update.message.text
+        .strip()
+    )
 
-    match = BIN_REGEX.match(text)
+    match = BIN_REGEX.match(
+        text
+    )
 
     if not match:
         return
 
-    bin_number = match.group(1)
+    bin_number = match.group(
+        1
+    )
 
     try:
-        result = await lookup_bin(bin_number)
+        result = await lookup_bin(
+            bin_number
+        )
 
         if not result:
             await update.message.reply_text(
@@ -156,43 +233,71 @@ async def bin_handler(
             or update.effective_user.first_name
         )
 
-        if result["source"] == "LOCAL":
-            data = result["data"]
+        if (
+            result["source"]
+            == "LOCAL"
+        ):
+            data = result[
+                "data"
+            ]
 
             country = html.escape(
-                data.get("country") or "N/A"
+                data.get(
+                    "country"
+                )
+                or "N/A"
             )
 
             bank = html.escape(
-                data.get("issuer") or "N/A"
+                data.get(
+                    "issuer"
+                )
+                or "N/A"
             )
 
             scheme = html.escape(
                 str(
-                    data.get("scheme")
+                    data.get(
+                        "scheme"
+                    )
                     or "N/A"
                 ).upper()
             )
 
             card_type = html.escape(
                 str(
-                    data.get("type")
+                    data.get(
+                        "type"
+                    )
                     or "N/A"
                 ).upper()
             )
 
             level = html.escape(
-                data.get("brand")
+                data.get(
+                    "brand"
+                )
                 or "N/A"
             )
 
-            source = "LOCAL"
-
         else:
-            data = result["data"]
+            data = result[
+                "data"
+            ]
 
-            bank_data = data.get("bank") or {}
-            country_data = data.get("country") or {}
+            bank_data = (
+                data.get(
+                    "bank"
+                )
+                or {}
+            )
+
+            country_data = (
+                data.get(
+                    "country"
+                )
+                or {}
+            )
 
             country = html.escape(
                 country_data.get(
@@ -201,10 +306,17 @@ async def bin_handler(
                 )
             )
 
-            if country_data.get("emoji"):
+            emoji = (
+                country_data.get(
+                    "emoji",
+                    "",
+                )
+            )
+
+            if emoji:
                 country += (
                     " "
-                    + country_data["emoji"]
+                    + emoji
                 )
 
             bank = html.escape(
@@ -241,8 +353,6 @@ async def bin_handler(
                 )
             )
 
-            source = "BINLIST"
-
         response = f"""
 💳 <b>BIN Lookup Result</b>
 
@@ -255,7 +365,7 @@ async def bin_handler(
 
 <b>{scheme} CARD</b>
 
-📚 <b>Source:</b> {source}
+📚 <b>Source:</b> {result["source"]}
 
 👤 <b>Sent by:</b> @{user}
 """.strip()
@@ -290,7 +400,8 @@ def main():
     load_local_bins()
 
     app = (
-        Application.builder()
+        Application
+        .builder()
         .token(TOKEN)
         .build()
     )
@@ -325,7 +436,9 @@ def main():
     )
 
     print(
-        f"Port: {PORT}"
+        f"Loaded "
+        f"{len(LOCAL_BINS):,} "
+        f"BINs"
     )
 
     app.run_webhook(
@@ -342,4 +455,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
