@@ -32,7 +32,7 @@ logging.basicConfig(
 )
 
 BIN_REGEX = re.compile(
-    r"^(?:!bin|!ibin|/bin)\s+(\d{6,8})$",
+    r"^(?:!bin|!ibin|/bin)\s*(\d{6,8})$",
     re.IGNORECASE,
 )
 
