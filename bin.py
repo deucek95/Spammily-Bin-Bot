@@ -354,19 +354,12 @@ async def bin_handler(
             )
 
         response = f"""
-💳 <b>BIN Lookup Result</b>
-
 🔢 <b>BIN:</b> {bin_number}
 🌍 <b>Country:</b> {country}
 🏦 <b>Bank:</b> {bank}
 💳 <b>Brand:</b> {scheme}
 💰 <b>Type:</b> {card_type}
 🏆 <b>Level:</b> {level}
-
-<b>{scheme} CARD</b>
-
-📚 <b>Source:</b> {result["source"]}
-
 👤 <b>Sent by:</b> @{user}
 """.strip()
 
