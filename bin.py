@@ -1,10 +1,18 @@
+```python
 import os
 import re
+import csv
 import html
 import logging
 import httpx
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 TOKEN = os.environ.get("BOT_TOKEN")
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -26,26 +34,102 @@ BIN_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+LOCAL_BINS = {}
+CACHE = {}
 
-async def lookup_bin(bin_number: str):
+
+def load_local_bins():
+    try:
+        with open(
+            "bin-list-data.csv",
+            encoding="utf-8",
+        ) as f:
+
+            reader = csv.DictReader(f)
+
+            for row in reader:
+                bin_number = row["BIN"].strip()
+
+                if not bin_number.isdigit():
+                    continue
+
+                if len(bin_number) < 6:
+                    continue
+
+                LOCAL_BINS[bin_number[:6]] = {
+                    "scheme": row.get("Brand", ""),
+                    "type": row.get("Type", ""),
+                    "brand": row.get("Category", ""),
+                    "issuer": row.get("Issuer", ""),
+                    "country": row.get("CountryName", ""),
+                    "phone": row.get("IssuerPhone", ""),
+                    "url": row.get("IssuerUrl", ""),
+                }
+
+        logging.info(
+            "Loaded %s local BINs",
+            f"{len(LOCAL_BINS):,}",
+        )
+
+    except Exception as e:
+        logging.exception(e)
+        raise
+
+
+async def lookup_binlist(bin_number):
     headers = {
         "User-Agent": "TelegramBinBot/1.0"
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(
+        timeout=10
+    ) as client:
+
         response = await client.get(
             f"https://lookup.binlist.net/{bin_number}",
             headers=headers,
         )
 
-    return response
+    if response.status_code == 200:
+        return response.json()
+
+    return None
+
+
+async def lookup_bin(bin_number):
+    key = bin_number[:6]
+
+    if key in CACHE:
+        return CACHE[key]
+
+    if key in LOCAL_BINS:
+        result = {
+            "source": "LOCAL",
+            "data": LOCAL_BINS[key],
+        }
+
+        CACHE[key] = result
+        return result
+
+    result = await lookup_binlist(bin_number)
+
+    if result:
+        response = {
+            "source": "BINLIST",
+            "data": result,
+        }
+
+        CACHE[key] = response
+        return response
+
+    return None
 
 
 async def bin_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    if not update.message or not update.message.text:
+    if not update.message:
         return
 
     text = update.message.text.strip()
@@ -58,73 +142,132 @@ async def bin_handler(
     bin_number = match.group(1)
 
     try:
-        response = await lookup_bin(bin_number)
+        result = await lookup_bin(bin_number)
 
-        if response.status_code != 200:
+        if not result:
             await update.message.reply_text(
-                f"❌ BIN <code>{bin_number}</code> not found or invalid.",
+                f"❌ BIN <code>{bin_number}</code> not found.",
                 parse_mode="HTML",
             )
             return
-
-        data = response.json()
-
-        bank = data.get("bank") or {}
-        country = data.get("country") or {}
-
-        country_name = html.escape(
-            country.get("name", "N/A")
-        )
-
-        flag = country.get("emoji", "")
-
-        bank_name = html.escape(
-            bank.get("name", "N/A")
-        )
-
-        scheme = html.escape(
-            str(data.get("scheme", "N/A")).upper()
-        )
-
-        card_type = html.escape(
-            str(data.get("type", "N/A")).upper()
-        )
-
-        level = html.escape(
-            str(data.get("brand", "N/A"))
-        )
 
         user = html.escape(
             update.effective_user.username
             or update.effective_user.first_name
         )
 
-        result = f"""
+        if result["source"] == "LOCAL":
+            data = result["data"]
+
+            country = html.escape(
+                data.get("country") or "N/A"
+            )
+
+            bank = html.escape(
+                data.get("issuer") or "N/A"
+            )
+
+            scheme = html.escape(
+                str(
+                    data.get("scheme")
+                    or "N/A"
+                ).upper()
+            )
+
+            card_type = html.escape(
+                str(
+                    data.get("type")
+                    or "N/A"
+                ).upper()
+            )
+
+            level = html.escape(
+                data.get("brand")
+                or "N/A"
+            )
+
+            source = "LOCAL"
+
+        else:
+            data = result["data"]
+
+            bank_data = data.get("bank") or {}
+            country_data = data.get("country") or {}
+
+            country = html.escape(
+                country_data.get(
+                    "name",
+                    "N/A",
+                )
+            )
+
+            if country_data.get("emoji"):
+                country += (
+                    " "
+                    + country_data["emoji"]
+                )
+
+            bank = html.escape(
+                bank_data.get(
+                    "name",
+                    "N/A",
+                )
+            )
+
+            scheme = html.escape(
+                str(
+                    data.get(
+                        "scheme",
+                        "N/A",
+                    )
+                ).upper()
+            )
+
+            card_type = html.escape(
+                str(
+                    data.get(
+                        "type",
+                        "N/A",
+                    )
+                ).upper()
+            )
+
+            level = html.escape(
+                str(
+                    data.get(
+                        "brand",
+                        "N/A",
+                    )
+                )
+            )
+
+            source = "BINLIST"
+
+        response = f"""
 💳 <b>BIN Lookup Result</b>
 
 🔢 <b>BIN:</b> {bin_number}
-🌍 <b>Country:</b> {country_name} {flag}
-🏦 <b>Bank:</b> {bank_name}
+🌍 <b>Country:</b> {country}
+🏦 <b>Bank:</b> {bank}
 💳 <b>Brand:</b> {scheme}
 💰 <b>Type:</b> {card_type}
 🏆 <b>Level:</b> {level}
 
 <b>{scheme} CARD</b>
 
+📚 <b>Source:</b> {source}
+
 👤 <b>Sent by:</b> @{user}
 """.strip()
 
         await update.message.reply_text(
-            result,
+            response,
             parse_mode="HTML",
         )
 
-    except httpx.RequestError:
-        await update.message.reply_text(
-            "⚠️ Could not fetch BIN info right now."
-        )
     except Exception as e:
         logging.exception(e)
+
         await update.message.reply_text(
             "⚠️ An unexpected error occurred."
         )
@@ -144,36 +287,59 @@ async def start(
 
 
 def main():
-    app = Application.builder().token(TOKEN).build()
+    load_local_bins()
 
-    app.add_handler(
-        CommandHandler("start", start)
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .build()
     )
 
     app.add_handler(
-        CommandHandler("bin", bin_handler)
+        CommandHandler(
+            "start",
+            start,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "bin",
+            bin_handler,
+        )
     )
 
     app.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
+            filters.TEXT
+            & ~filters.COMMAND,
             bin_handler,
         )
     )
 
     WEBHOOK_PATH = "telegram"
 
-    print(f"Webhook URL: {RENDER_EXTERNAL_URL}/{WEBHOOK_PATH}")
-    print(f"Port: {PORT}")
+    print(
+        f"Webhook URL: "
+        f"{RENDER_EXTERNAL_URL}/{WEBHOOK_PATH}"
+    )
+
+    print(
+        f"Port: {PORT}"
+    )
 
     app.run_webhook(
-    listen="0.0.0.0",
-    port=PORT,
-    url_path=WEBHOOK_PATH,
-    webhook_url=f"{RENDER_EXTERNAL_URL}/{WEBHOOK_PATH}",
-    drop_pending_updates=True,
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=WEBHOOK_PATH,
+        webhook_url=(
+            f"{RENDER_EXTERNAL_URL}/"
+            f"{WEBHOOK_PATH}"
+        ),
+        drop_pending_updates=True,
     )
 
 
 if __name__ == "__main__":
     main()
+```
